@@ -620,7 +620,7 @@ elif page == "Data Summary":
 
     # --- SECTION 3: MASS DISTRIBUTION ---
     st.divider()
-    st.subheader("ℹMass Distribution: How big are they?")
+    st.subheader("Mass Distribution: How big are they?")
     
     c_hist_text, c_hist_chart = st.columns([1, 3])
     
