@@ -1,0 +1,8 @@
+# --- Environments and Caches ---
+# Ignores the virtual environment folder specific to your computer
+venv/
+.venv/
+
+# Ignores Python's cache files
+__pycache__/
+*.pyc
