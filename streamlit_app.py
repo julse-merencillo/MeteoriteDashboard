@@ -3,8 +3,10 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 import requests
+import re
 
 from sklearn.cluster import DBSCAN
+from sklearn.metrics import homogeneity_score
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Meteorite Explorer", page_icon="☄️", layout="wide")
@@ -30,6 +32,12 @@ def inject_custom_css():
         box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2);
         transition: 0.3s;
         text-align: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: center; /* Vertically center content */
+        align-items: center;     /* Horizontally center content */
+        min-height: 140px;       /* Force all cards to be at least this tall */
+        height: 100%;            /* Stretch to fill container */
     }
     .metric-card:hover {
         box-shadow: 0 8px 16px 0 rgba(0,0,0,0.2);
@@ -46,6 +54,41 @@ def inject_custom_css():
     }
     </style>
     """, unsafe_allow_html=True)
+
+def evaluate_clustering(df):
+    clustered_df = df[df['cluster_id'] != -1].copy()
+    
+    if clustered_df.empty:
+        return 0, 0, "None"
+    
+    # --- THE FIX: Normalize Names ---
+    # We strip out numbers to compare "Base Names"
+    # Example: "Yamato 000593" -> "Yamato"
+    # Example: "Allan Hills 84001" -> "Allan Hills"
+    def get_base_name(name):
+        # Remove digits and clean up whitespace
+        return re.sub(r'\d+', '', str(name)).strip()
+        
+    clustered_df['base_name'] = clustered_df['name'].apply(get_base_name)
+    
+    # 1. Homogeneity: Check consistency of the BASE name
+    # This rewards the AI for grouping all "Yamato" meteorites together, 
+    # even if they have different numbers.
+    score = homogeneity_score(clustered_df['base_name'], clustered_df['cluster_id'])
+    
+    # 2. Noise Ratio
+    total_points = len(df)
+    noise_points = len(df[df['cluster_id'] == -1])
+    noise_ratio = (noise_points / total_points) * 100
+    
+    # 3. Identify the "King" of the largest cluster
+    largest_cluster_id = clustered_df['cluster_id'].value_counts().idxmax()
+    largest_cluster = clustered_df[clustered_df['cluster_id'] == largest_cluster_id]
+    
+    # Return the most common base name (e.g., "Yamato")
+    top_name = largest_cluster['base_name'].mode()[0]
+    
+    return score * 100, noise_ratio, top_name
 
 # --- DATA LOADING ---
 @st.cache_data
@@ -279,13 +322,63 @@ if page == "Interactive Map":
 
         if color_mode == "AI Analysis: Strewn Fields":
             if 'detect_strewn_fields' in globals():
-                df_plot = detect_strewn_fields(df_plot, epsilon_km=50, min_samples=5)
+                # 1. Run Model
+                radius = 50
+                df_plot = detect_strewn_fields(df_plot, epsilon_km=radius, min_samples=5)
                 df_plot['color_group'] = df_plot['cluster_id'].apply(lambda x: f"Cluster {x}" if x >= 0 else "Isolated Fall")
+                
+                # 2. Setup Plot Args
                 color_col = "color_group"
                 is_discrete = True
                 title_text = "AI Detected Strewn Fields"
                 color_map = {"Isolated Fall": "#444444"} 
+                
+                # --- AI EVALUATION PANEL (STYLED) ---
+                st.markdown("### 🧠 AI Performance Report")
+                
+                # Calculate Metrics
+                purity_score, noise_pct, top_cluster_name = evaluate_clustering(df_plot)
+                
+                k1, k2, k3 = st.columns(3)
+                
+                k1.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title" title="How often does a cluster contain only ONE type of meteorite?">Cluster Consistency</div>
+                    <div class="metric-value">{purity_score:.1f}%</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                k2.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title" title="Percentage of meteorites that are isolated (not part of any cluster).">Noise Ratio</div>
+                    <div class="metric-value">{noise_pct:.1f}%</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                k3.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title" title="The meteorite name associated with the biggest detected group.">Largest Cluster</div>
+                    <div class="metric-value" style="font-size: 24px;">{top_cluster_name}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Visual Explanation
+                with st.expander("See details", expanded=False):
+                    st.write("""
+                    **How to interpret this:**
+                    *   **High Consistency (>80%):** The AI successfully grouped meteorites of the same name together (e.g., grouping all "Yamato" fragments).
+                    *   **High Noise:** This is normal! Most meteorites fall alone. Only large events (showers) create clusters.
+                    """)
+                    
+                    # Show top clusters
+                    if 'cluster_id' in df_plot.columns:
+                        top_clusters = df_plot[df_plot['cluster_id'] != -1]['cluster_id'].value_counts().head(5)
+                        if not top_clusters.empty:
+                            st.write("**Top 5 Detected Strewn Fields (by size):**")
+                            st.bar_chart(top_clusters)
+
             else:
+                st.error("AI function missing.")
                 color_col = "mass_log"
 
         elif color_mode == "Mass (Heatmap)":
